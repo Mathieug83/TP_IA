@@ -13,57 +13,54 @@ if torch.cuda.is_available():
 else:
     print("Aucun GPU CUDA disponible")
 
-def plot_forward(net,conductivity=None,heat_source=None):
 
-    x=np.arange(0,2,0.02)
-    t=np.arange(0,1,0.02)
-    ms_x, ms_t = np.meshgrid(x, t)
-    x_all = np.ravel(ms_x).reshape(-1,1)
-    t_all = np.ravel(ms_t).reshape(-1,1)
-    pt_x = Variable(torch.from_numpy(x_all).float(), requires_grad=False).to(device)
-    pt_t = Variable(torch.from_numpy(t_all).float(), requires_grad=False).to(device)
+def compare_npz(paths: list, labels: list = None):
+    """
+    Affiche les surfaces u(x,t) de plusieurs fichiers .npz côte à côte.
+    
+    Args:
+        paths  : liste de chemins vers des fichiers .npz (contenant ms_x, ms_t, u)
+        labels : liste de titres pour chaque subplot (optionnel)
+    """
+    if labels is None:
+        labels = [p.replace('.npz', '') for p in paths]
 
-    if heat_source is not None:
+    n = len(paths)
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5),
+                             subplot_kw={'projection': '3d'})
+    
+    # Si un seul fichier, axes n'est pas une liste
+    if n == 1:
+        axes = [axes]
 
-      pt_u = heat_source(pt_x,pt_t)
-      u=pt_u.data.cpu().numpy()
-      ms_u = u.reshape(ms_x.shape)
+    for ax, path, label in zip(axes, paths, labels):
+        ref = np.load(path)
+        ms_x = ref['ms_x']
+        ms_t = ref['ms_t']
+        u    = ref['u']
 
-      fig = plt.figure()
-      ax = fig.add_subplot(projection = '3d')
+        surf = ax.plot_surface(ms_x, ms_t, u, cmap=cm.coolwarm,
+                               linewidth=0, antialiased=False)
+        fig.colorbar(surf, ax=ax, shrink=0.4)
+        ax.set_title(label)
+        ax.set_xlabel('x')
+        ax.set_ylabel('t')
+        ax.set_zlabel('u')
 
-      surf = ax.plot_surface(ms_x,ms_t,ms_u, cmap=cm.coolwarm,linewidth=0, antialiased=False)
-      fig.colorbar(surf, shrink=0.4, aspect=5)
-      plt.xlabel('x')
-      plt.ylabel('t')
-      plt.title('heat source q(x,t)')
-      plt.show()
+        print(f"[{label}]  max={u.max():.4f}  min={u.min():.4f}  mean={u.mean():.4f}")
 
-    fig = plt.figure()
-    ax = fig.add_subplot(projection = '3d')
+    # Synchronisation des vues 3D
+    def on_move(event):
+        if event.inaxes in axes:
+            for ax in axes:
+                if ax != event.inaxes:
+                    ax.view_init(elev=event.inaxes.elev,
+                                 azim=event.inaxes.azim)
+            fig.canvas.draw_idle()
 
-    pt_u = net(pt_x,pt_t)
-    u=pt_u.data.cpu().numpy()
-    ms_u = u.reshape(ms_x.shape)
-
-    surf = ax.plot_surface(ms_x,ms_t,ms_u, cmap=cm.coolwarm,linewidth=0, antialiased=False)
-    fig.colorbar(surf, shrink=0.4, aspect=5)
-    plt.xlabel('x')
-    plt.ylabel('t')
-    plt.title('temperature u(x,t)')
+    fig.canvas.mpl_connect('motion_notify_event', on_move)
+    plt.tight_layout()
     plt.show()
-
-
-
-    if conductivity is not None:
-      u = conductivity( Variable(torch.from_numpy(x).float()) )
-
-      plt.plot(x,u,'+')
-      plt.xlabel('x')
-      plt.ylabel('k')
-      plt.title('conductivity k(x)')
-      plt.show()
-
 
 class forward_problem:
     def __init__(self, net):
@@ -159,13 +156,13 @@ class forward_problem:
         # Boundary condition residual
         u = self.net(x, t)
         residual = u - self.bc(x, t)
-        return residual*2
+        return residual
 
     def f_ic(self, x, t):
         # Initial condition residual
         u = self.net(x, t)
         residual = u - self.ic(x)
-        return residual*4
+        return residual
 
     def plot_forward(self, conductivity=None, heat_source=None):
         # Make sure to add the plotting method from the original code
@@ -266,7 +263,7 @@ class forward_problem:
                 pt_t_collocation_ic = Variable(torch.zeros_like(pt_x_collocation_ic), requires_grad=True).to(device)
 
                 pt_x_collocation_bc = Variable(torch.tensor([[0.0], [2.0]]).float(), requires_grad=True).to(device)
-                pt_t_collocation_bc = Variable(torch.Tensor(2, 1).uniform_(0.0, 1.0)+torch.randn(2,1)*0.01, requires_grad=True).to(device)
+                pt_t_collocation_bc = Variable(torch.Tensor(2, 1).uniform_(0.0, 1.0), requires_grad=True).to(device)
 
             # Calcul de la perte basée sur l'EDP
             f_out = self.f(pt_x_collocation, pt_t_collocation)
@@ -285,7 +282,7 @@ class forward_problem:
 
             # Calcul de la perte globale
             # Vous pouvez ajuster les coefficients si nécessaire
-            loss = mse_f + mse_ic + mse_bc
+            loss = mse_f + mse_ic*10 + mse_bc
 
             # Rétropropagation
             loss.backward()
@@ -301,7 +298,7 @@ class forward_problem:
             # Visualisation périodique
             if epoch == N_iter-1:
                 self.plot_forward()
-    def solve_with_sensors(self, N_iter=1000, ref_path='reference_clean.npz'):
+    def solve_with_sensors(self, N_iter=1000, ref_path='reference_clean.npz', P_bruit=0.01):
 
         # Charger la vérité terrain
         ref = np.load(ref_path)
@@ -322,11 +319,11 @@ class forward_problem:
         # Convertir en tenseurs
         pt_t_s05 = Variable(torch.from_numpy(t_sensor).float(),    requires_grad=False).to(device)
         pt_x_s05 = Variable(torch.full_like(pt_t_s05, 0.5),        requires_grad=False).to(device)
-        pt_u_s05 = Variable(torch.from_numpy(u_sensor_05).float(), requires_grad=False).to(device)
+        pt_u_s05 = Variable(torch.from_numpy(u_sensor_05).float()+torch.randn(*u_sensor_05.shape)*P_bruit, requires_grad=False).to(device)
 
         pt_t_s15 = Variable(torch.from_numpy(t_sensor).float(),    requires_grad=False).to(device)
         pt_x_s15 = Variable(torch.full_like(pt_t_s15, 1.5),        requires_grad=False).to(device)
-        pt_u_s15 = Variable(torch.from_numpy(u_sensor_15).float(), requires_grad=False).to(device)
+        pt_u_s15 = Variable(torch.from_numpy(u_sensor_15).float()+torch.randn(*u_sensor_15.shape)*P_bruit, requires_grad=False).to(device)
 
         # --- Setup entraînement ---
         net = self.net
@@ -351,13 +348,15 @@ class forward_problem:
             # 3. Données capteurs à x=0.5
             u_pred_05 = net(pt_x_s05, pt_t_s05)
             mse_s05   = mse(u_pred_05, pt_u_s05)
+            pt_u_s05 = Variable(torch.from_numpy(u_sensor_05).float()+torch.randn(*u_sensor_05.shape)*P_bruit, requires_grad=False).to(device)
 
             # 4. Données capteurs à x=1.5
             u_pred_15 = net(pt_x_s15, pt_t_s15)
             mse_s15   = mse(u_pred_15, pt_u_s15)
+            pt_u_s15 = Variable(torch.from_numpy(u_sensor_15).float()+torch.randn(*u_sensor_15.shape)*P_bruit, requires_grad=False).to(device)
 
             # Perte globale (pas de BC !)
-            loss = mse_ic + mse_s05 + mse_s15 + mse_f*0.0
+            loss = mse_ic + mse_s05 + mse_s15 + mse_f*0.01
 
             loss.backward()
             optimizer.step()
@@ -366,8 +365,8 @@ class forward_problem:
                 with torch.autograd.no_grad():
                     print(epoch, "Loss:", loss.data)
 
-            if epoch == N_iter - 1:
-                self.plot_forward()
+            #if epoch == N_iter - 1:
+                #self.plot_forward()
 
     def save_reference(self, path='reference_clean.npz'):
         x = np.arange(0, 2, 0.02)
@@ -402,7 +401,7 @@ class forward_problem:
                                 subplot_kw={'projection': '3d'})
         for ax, data, title in zip(axes,
             [u_clean, u_noisy, diff],
-            ['Référence (clean)', 'Bruité', 'Différence absolue']):
+            ['Référence (clean)', 'Capteurs avec physique', 'Différence absolue']):
             surf = ax.plot_surface(ms_x, ms_t, data, cmap=cm.coolwarm)
             fig.colorbar(surf, ax=ax, shrink=0.4)
             ax.set_title(title)
@@ -440,9 +439,44 @@ class FCN(torch.nn.Module):
     
 
 
-net = FCN().to(device)
-heat_equation = forward_problem(net)
 
-heat_equation.solve_with_sensors(N_iter=5000)
+# --- Sweep sur les puissances de bruit ---
+noise_levels = np.logspace(-4, 0, 30).tolist()
+max_errors = []
 
-heat_equation.compare_with_reference("reference_clean.npz")
+for P_bruit in noise_levels:
+    print(f"\n=== P_bruit = {P_bruit} ===")
+    
+    # Réinitialiser le réseau à chaque fois
+    net = FCN().to(device)
+    heat_equation = forward_problem(net)
+    
+    # Entraîner avec ce niveau de bruit
+    heat_equation.solve_with_sensors(N_iter=5000, P_bruit=P_bruit)
+    
+    # Calculer l'erreur max par rapport à la référence propre
+    ref = np.load('reference_clean.npz')
+    ms_x, ms_t = ref['ms_x'], ref['ms_t']
+    u_clean = ref['u']
+    
+    x_all = torch.from_numpy(np.ravel(ms_x).reshape(-1, 1)).float().to(device)
+    t_all = torch.from_numpy(np.ravel(ms_t).reshape(-1, 1)).float().to(device)
+    
+    with torch.no_grad():
+        u_pred = net(x_all, t_all).cpu().numpy().reshape(ms_x.shape)
+    
+    err_max = np.abs(u_pred - u_clean).max()
+    max_errors.append(err_max)
+    print(f"  → Erreur max : {err_max:.6f}")
+
+# --- Tracé ---
+plt.figure(figsize=(8, 5))
+plt.plot(noise_levels, max_errors, 'o-', color='steelblue', linewidth=2, markersize=7)
+plt.xscale('log')
+plt.xlabel('Ecart-type du bruit (e_t)')
+plt.ylabel('Erreur max |u_pred - u_clean|')
+plt.title('Erreur maximale en fonction de l\'écart-type du bruit')
+plt.grid(True)
+plt.tight_layout()
+plt.savefig('erreur_vs_bruit.png', dpi=150)
+plt.show()
