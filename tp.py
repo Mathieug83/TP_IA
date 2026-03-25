@@ -360,14 +360,17 @@ class forward_problem:
 
             loss.backward()
             optimizer.step()
-
+    
             if epoch <= 10 or epoch == 25 or epoch == 50 or epoch % 100 == 0:
                 with torch.autograd.no_grad():
                     print(epoch, "Loss:", loss.data)
-
-            #if epoch == N_iter - 1:
-                #self.plot_forward()
-
+            if loss.data < 0.01:
+                print(f"Convergence atteinte à l'epoch {epoch} avec une perte de {loss.data:.6f}")
+                break
+        '''
+            if epoch == N_iter - 1:
+                self.plot_forward()
+        '''
     def save_reference(self, path='reference_clean.npz'):
         x = np.arange(0, 2, 0.02)
         t = np.arange(0, 1, 0.02)
@@ -441,9 +444,9 @@ class FCN(torch.nn.Module):
 
 
 # --- Sweep sur les puissances de bruit ---
-noise_levels = np.logspace(-4, 0, 30).tolist()
+noise_levels = [0.0] + np.logspace(-2, 1, 39).tolist()
 max_errors = []
-
+print(len(noise_levels))
 for P_bruit in noise_levels:
     print(f"\n=== P_bruit = {P_bruit} ===")
     
@@ -452,7 +455,7 @@ for P_bruit in noise_levels:
     heat_equation = forward_problem(net)
     
     # Entraîner avec ce niveau de bruit
-    heat_equation.solve_with_sensors(N_iter=5000, P_bruit=P_bruit)
+    heat_equation.solve_with_sensors(N_iter=10000, P_bruit=P_bruit)
     
     # Calculer l'erreur max par rapport à la référence propre
     ref = np.load('reference_clean.npz')
@@ -465,17 +468,17 @@ for P_bruit in noise_levels:
     with torch.no_grad():
         u_pred = net(x_all, t_all).cpu().numpy().reshape(ms_x.shape)
     
-    err_max = np.abs(u_pred - u_clean).max()
-    max_errors.append(err_max)
-    print(f"  → Erreur max : {err_max:.6f}")
+    err_mean = np.abs(u_pred - u_clean).mean()
+    max_errors.append(err_mean)
+    print(f"  → Erreur moyenne : {err_mean:.6f}")
 
 # --- Tracé ---
 plt.figure(figsize=(8, 5))
 plt.plot(noise_levels, max_errors, 'o-', color='steelblue', linewidth=2, markersize=7)
 plt.xscale('log')
 plt.xlabel('Ecart-type du bruit (e_t)')
-plt.ylabel('Erreur max |u_pred - u_clean|')
-plt.title('Erreur maximale en fonction de l\'écart-type du bruit')
+plt.ylabel('Erreur moyenne |u_pred - u_clean|')
+plt.title('Erreur moyenne en fonction de l\'écart-type du bruit')
 plt.grid(True)
 plt.tight_layout()
 plt.savefig('erreur_vs_bruit.png', dpi=150)
