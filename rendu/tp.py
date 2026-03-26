@@ -300,23 +300,19 @@ class forward_problem:
                 self.plot_forward()
     def solve_with_sensors(self, N_iter=1000, ref_path='reference_clean.npz', P_bruit=0.01,dist_capteurs=1.5, critere_loss=1e-4):
 
-        # Charger la vérité terrain
         ref = np.load(ref_path)
-        ms_x_ref = ref['ms_x']  # shape (50, 100)
+        ms_x_ref = ref['ms_x'] 
         ms_t_ref = ref['ms_t']
         u_ref    = ref['u']
 
-        # --- Extraire les valeurs capteurs à x=0.5 et x=1.5 ---
-        x_vals = ms_x_ref[0, :]          # vecteur x (100 valeurs de 0 à 2)
-        idx_02 = np.argmin(np.abs(x_vals - 0.2))   # index le plus proche de 0.2
-        idx_d = np.argmin(np.abs(x_vals - dist_capteurs))   # index le plus proche de 1.5
+        x_vals = ms_x_ref[0, :]         
+        idx_02 = np.argmin(np.abs(x_vals - 0.2))  
+        idx_d = np.argmin(np.abs(x_vals - dist_capteurs)) 
 
-        # t et u pour chaque capteur (toutes les valeurs de t)
-        t_sensor   = ms_t_ref[:, 0].reshape(-1, 1)          # (50,) toutes les valeurs de t
-        u_sensor_02 = u_ref[:, idx_02].reshape(-1, 1)        # u à x=0.2
-        u_sensor_d = u_ref[:, idx_d].reshape(-1, 1)        # u à x=1.5
+        t_sensor   = ms_t_ref[:, 0].reshape(-1, 1)     
+        u_sensor_02 = u_ref[:, idx_02].reshape(-1, 1)   
+        u_sensor_d = u_ref[:, idx_d].reshape(-1, 1)     
 
-        # Convertir en tenseurs
         pt_t_s02 = Variable(torch.from_numpy(t_sensor).float(),    requires_grad=False).to(device)
         pt_x_s02 = Variable(torch.full_like(pt_t_s02, 0.2),        requires_grad=False).to(device)
         pt_u_s02 = Variable(torch.from_numpy(u_sensor_02).float()+torch.randn(*u_sensor_02.shape)*P_bruit, requires_grad=False).to(device)
@@ -325,7 +321,6 @@ class forward_problem:
         pt_x_sd = Variable(torch.full_like(pt_t_sd, dist_capteurs),        requires_grad=False).to(device)
         pt_u_sd = Variable(torch.from_numpy(u_sensor_d).float()+torch.randn(*u_sensor_d.shape)*P_bruit, requires_grad=False).to(device)
 
-        # --- Setup entraînement ---
         net = self.net
         mse = torch.nn.MSELoss()
         optimizer = torch.optim.Adam(net.parameters(), lr=1.0e-2, weight_decay=1.0e-100)
@@ -333,30 +328,25 @@ class forward_problem:
         for epoch in range(N_iter):
             optimizer.zero_grad()
 
-            # 1. Résidu de l'EDP sur les points de collocation
             pt_x_colloc = Variable(torch.Tensor(100, 1).uniform_(0.0, 2.0), requires_grad=True).to(device)
             pt_t_colloc = Variable(torch.Tensor(100, 1).uniform_(0.0, 1.0), requires_grad=True).to(device)
             f_colloc = self.f(pt_x_colloc, pt_t_colloc)
             mse_f = mse(f_colloc, torch.zeros_like(f_colloc))
 
-            # 2. Condition initiale t=0 (seule condition connue)
             pt_x_ic  = Variable(torch.Tensor(100,1).uniform_(0.0, 2.0), requires_grad=True).to(device)
             pt_t_ic  = Variable(torch.zeros(100,1), requires_grad=True).to(device)
             f_ic     = self.f_ic(pt_x_ic, pt_t_ic)
             mse_ic   = mse(f_ic, torch.zeros_like(f_ic))
 
-            # 3. Données capteurs à x=0.2
             u_pred_02 = net(pt_x_s02, pt_t_s02)
             mse_s02   = mse(u_pred_02, pt_u_s02)
             pt_u_s02 = Variable(torch.from_numpy(u_sensor_02).float()+torch.randn(*u_sensor_02.shape)*P_bruit, requires_grad=False).to(device)
 
-            # 4. Données capteurs à x=1.5
             u_pred_d = net(pt_x_sd, pt_t_sd)
             mse_d    = mse(u_pred_d, pt_u_sd)
             pt_u_sd = Variable(torch.from_numpy(u_sensor_d).float()+torch.randn(*u_sensor_d.shape)*P_bruit, requires_grad=False).to(device)
 
-            # Perte globale (pas de BC !)
-            loss = mse_ic + mse_s02 + mse_d + mse_f*0.001
+            loss = mse_ic + mse_s02 + mse_d + mse_f*0.01
 
             loss.backward()
             optimizer.step()
@@ -424,8 +414,6 @@ class forward_problem:
         plt.tight_layout()
         plt.show()
 
-# un reseau standard feed forward
-# le choix des parametres reste toujours un probleme ouvert
 class FCN(torch.nn.Module):
     def __init__(self):
       super(FCN, self).__init__()
@@ -443,9 +431,8 @@ class FCN(torch.nn.Module):
 
 
 
-# --- Sweep sur les puissances de bruit ---
-distance_levels = np.logspace(-2, 1, 20).tolist()
-N_SWEEPS = 20
+distance_levels = np.linspace(0, 1.8, 20).tolist()
+N_SWEEPS = 5
 all_errors = np.zeros((N_SWEEPS, len(distance_levels)))
 
 for sweep_idx in range(N_SWEEPS):
@@ -456,14 +443,11 @@ for sweep_idx in range(N_SWEEPS):
     for i, dist_capteurs in enumerate(distance_levels):
         print(f"\n  === dist_capteurs = {dist_capteurs:.4f} ===")
         
-        # Réinitialiser le réseau à chaque fois
         net = FCN().to(device)
         heat_equation = forward_problem(net)
         
-        # Entraîner avec ce niveau de bruit
-        heat_equation.solve_with_sensors(N_iter=10000, P_bruit=dist_capteurs, critere_loss=1e-3)
+        heat_equation.solve_with_sensors(N_iter=10000, dist_capteurs=dist_capteurs+0.02, critere_loss=1e-3)
         
-        # Calculer l'erreur moyenne par rapport à la référence propre
         ref = np.load('reference_clean.npz')
         ms_x, ms_t = ref['ms_x'], ref['ms_t']
         u_clean = ref['u']
@@ -478,19 +462,15 @@ for sweep_idx in range(N_SWEEPS):
         all_errors[sweep_idx, i] = err_mean
         print(f"  → Erreur moyenne : {err_mean:.6f}")
 
-# --- Statistiques sur les sweeps ---
 mean_errors = all_errors.mean(axis=0)
 std_errors  = all_errors.std(axis=0)
 
-# --- Tracé ---
 plt.figure(figsize=(8, 5))
 
-# Courbes individuelles (transparentes)
 for sweep_idx in range(N_SWEEPS):
     plt.plot(distance_levels, all_errors[sweep_idx], 'o-',
              color='steelblue', linewidth=1, markersize=4, alpha=0.25)
 
-# Moyenne ± écart-type
 plt.fill_between(distance_levels,
                  mean_errors - std_errors,
                  mean_errors + std_errors,
@@ -498,11 +478,11 @@ plt.fill_between(distance_levels,
 plt.plot(distance_levels, mean_errors, 'o-',
          color='steelblue', linewidth=2.5, markersize=7, label=f'Moyenne ({N_SWEEPS} sweeps)')
 
-plt.xlabel('Ecart type du bruit')
+plt.xlabel('Distance entre les capteurs (x=0.2 et x=d)')
 plt.ylabel('Erreur moyenne |u_pred - u_clean|')
-plt.title("Erreur moyenne en fonction de l'ecart type du bruit")
+plt.title('Erreur moyenne en fonction de la distance entre les capteurs')
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.savefig('erreur_vs_bruit_vrai.png', dpi=150)
+plt.savefig('erreur_vs_bruit.png', dpi=150)
 plt.show()
