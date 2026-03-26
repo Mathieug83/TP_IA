@@ -282,7 +282,7 @@ class forward_problem:
 
             # Calcul de la perte globale
             # Vous pouvez ajuster les coefficients si nécessaire
-            loss = mse_f + mse_ic*10 + mse_bc
+            loss = mse_f + mse_ic*20 + mse_bc
 
             # Rétropropagation
             loss.backward()
@@ -298,7 +298,7 @@ class forward_problem:
             # Visualisation périodique
             if epoch == N_iter-1:
                 self.plot_forward()
-    def solve_with_sensors(self, N_iter=1000, ref_path='reference_clean.npz', P_bruit=0.01):
+    def solve_with_sensors(self, N_iter=1000, ref_path='reference_clean.npz', P_bruit=0.01,dist_capteurs=1.5):
 
         # Charger la vérité terrain
         ref = np.load(ref_path)
@@ -308,22 +308,22 @@ class forward_problem:
 
         # --- Extraire les valeurs capteurs à x=0.5 et x=1.5 ---
         x_vals = ms_x_ref[0, :]          # vecteur x (100 valeurs de 0 à 2)
-        idx_05 = np.argmin(np.abs(x_vals - 0.5))   # index le plus proche de 0.5
-        idx_15 = np.argmin(np.abs(x_vals - 1.5))   # index le plus proche de 1.5
+        idx_02 = np.argmin(np.abs(x_vals - 0.2))   # index le plus proche de 0.2
+        idx_d = np.argmin(np.abs(x_vals - dist_capteurs))   # index le plus proche de 1.5
 
         # t et u pour chaque capteur (toutes les valeurs de t)
         t_sensor   = ms_t_ref[:, 0].reshape(-1, 1)          # (50,) toutes les valeurs de t
-        u_sensor_05 = u_ref[:, idx_05].reshape(-1, 1)        # u à x=0.5
-        u_sensor_15 = u_ref[:, idx_15].reshape(-1, 1)        # u à x=1.5
+        u_sensor_02 = u_ref[:, idx_02].reshape(-1, 1)        # u à x=0.2
+        u_sensor_d = u_ref[:, idx_d].reshape(-1, 1)        # u à x=1.5
 
         # Convertir en tenseurs
-        pt_t_s05 = Variable(torch.from_numpy(t_sensor).float(),    requires_grad=False).to(device)
-        pt_x_s05 = Variable(torch.full_like(pt_t_s05, 0.5),        requires_grad=False).to(device)
-        pt_u_s05 = Variable(torch.from_numpy(u_sensor_05).float()+torch.randn(*u_sensor_05.shape)*P_bruit, requires_grad=False).to(device)
+        pt_t_s02 = Variable(torch.from_numpy(t_sensor).float(),    requires_grad=False).to(device)
+        pt_x_s02 = Variable(torch.full_like(pt_t_s02, 0.2),        requires_grad=False).to(device)
+        pt_u_s02 = Variable(torch.from_numpy(u_sensor_02).float()+torch.randn(*u_sensor_02.shape)*P_bruit, requires_grad=False).to(device)
 
-        pt_t_s15 = Variable(torch.from_numpy(t_sensor).float(),    requires_grad=False).to(device)
-        pt_x_s15 = Variable(torch.full_like(pt_t_s15, 1.5),        requires_grad=False).to(device)
-        pt_u_s15 = Variable(torch.from_numpy(u_sensor_15).float()+torch.randn(*u_sensor_15.shape)*P_bruit, requires_grad=False).to(device)
+        pt_t_sd = Variable(torch.from_numpy(t_sensor).float(),    requires_grad=False).to(device)
+        pt_x_sd = Variable(torch.full_like(pt_t_sd, dist_capteurs),        requires_grad=False).to(device)
+        pt_u_sd = Variable(torch.from_numpy(u_sensor_d).float()+torch.randn(*u_sensor_d.shape)*P_bruit, requires_grad=False).to(device)
 
         # --- Setup entraînement ---
         net = self.net
@@ -345,18 +345,18 @@ class forward_problem:
             f_ic     = self.f_ic(pt_x_ic, pt_t_ic)
             mse_ic   = mse(f_ic, torch.zeros_like(f_ic))
 
-            # 3. Données capteurs à x=0.5
-            u_pred_05 = net(pt_x_s05, pt_t_s05)
-            mse_s05   = mse(u_pred_05, pt_u_s05)
-            pt_u_s05 = Variable(torch.from_numpy(u_sensor_05).float()+torch.randn(*u_sensor_05.shape)*P_bruit, requires_grad=False).to(device)
+            # 3. Données capteurs à x=0.2
+            u_pred_02 = net(pt_x_s02, pt_t_s02)
+            mse_s02   = mse(u_pred_02, pt_u_s02)
+            pt_u_s02 = Variable(torch.from_numpy(u_sensor_02).float()+torch.randn(*u_sensor_02.shape)*P_bruit, requires_grad=False).to(device)
 
             # 4. Données capteurs à x=1.5
-            u_pred_15 = net(pt_x_s15, pt_t_s15)
-            mse_s15   = mse(u_pred_15, pt_u_s15)
-            pt_u_s15 = Variable(torch.from_numpy(u_sensor_15).float()+torch.randn(*u_sensor_15.shape)*P_bruit, requires_grad=False).to(device)
+            u_pred_d = net(pt_x_sd, pt_t_sd)
+            mse_d    = mse(u_pred_d, pt_u_sd)
+            pt_u_sd = Variable(torch.from_numpy(u_sensor_d).float()+torch.randn(*u_sensor_d.shape)*P_bruit, requires_grad=False).to(device)
 
             # Perte globale (pas de BC !)
-            loss = mse_ic + mse_s05 + mse_s15 + mse_f*0.01
+            loss = mse_ic + mse_s02 + mse_d + mse_f*0.1
 
             loss.backward()
             optimizer.step()
@@ -364,7 +364,7 @@ class forward_problem:
             if epoch <= 10 or epoch == 25 or epoch == 50 or epoch % 100 == 0:
                 with torch.autograd.no_grad():
                     print(epoch, "Loss:", loss.data)
-            if loss.data < 0.01:
+            if loss.data < 0.0001:
                 print(f"Convergence atteinte à l'epoch {epoch} avec une perte de {loss.data:.6f}")
                 break
         '''
@@ -441,8 +441,11 @@ class FCN(torch.nn.Module):
       return output
     
 
-
-
+net = FCN().to(device)
+heat_equation = forward_problem(net)
+heat_equation.solve_with_sensors(N_iter=10000, P_bruit=0.0, dist_capteurs=1.5)
+heat_equation.compare_with_reference()
+'''
 # --- Sweep sur les puissances de bruit ---
 noise_levels = [0.0] + np.logspace(-2, 1, 39).tolist()
 max_errors = []
@@ -483,3 +486,4 @@ plt.grid(True)
 plt.tight_layout()
 plt.savefig('erreur_vs_bruit.png', dpi=150)
 plt.show()
+'''
