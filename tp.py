@@ -298,7 +298,7 @@ class forward_problem:
             # Visualisation périodique
             if epoch == N_iter-1:
                 self.plot_forward()
-    def solve_with_sensors(self, N_iter=1000, ref_path='reference_clean.npz', P_bruit=0.01,dist_capteurs=1.5):
+    def solve_with_sensors(self, N_iter=1000, ref_path='reference_clean.npz', P_bruit=0.01,dist_capteurs=1.5, critere_loss=1e-4):
 
         # Charger la vérité terrain
         ref = np.load(ref_path)
@@ -364,7 +364,7 @@ class forward_problem:
             if epoch <= 10 or epoch == 25 or epoch == 50 or epoch % 100 == 0:
                 with torch.autograd.no_grad():
                     print(epoch, "Loss:", loss.data)
-            if loss.data < 0.0001:
+            if loss.data < critere_loss:
                 print(f"Convergence atteinte à l'epoch {epoch} avec une perte de {loss.data:.6f}")
                 break
         '''
@@ -441,24 +441,21 @@ class FCN(torch.nn.Module):
       return output
     
 
-net = FCN().to(device)
-heat_equation = forward_problem(net)
-heat_equation.solve_with_sensors(N_iter=10000, P_bruit=0.0, dist_capteurs=1.5)
-heat_equation.compare_with_reference()
-'''
+
+
 # --- Sweep sur les puissances de bruit ---
-noise_levels = [0.0] + np.logspace(-2, 1, 39).tolist()
-max_errors = []
-print(len(noise_levels))
-for P_bruit in noise_levels:
-    print(f"\n=== P_bruit = {P_bruit} ===")
+distance_levels = [0.0] + np.logspace(0, 1.8, 20).tolist()
+mean_errors = []
+print(len(distance_levels))
+for dist_capteurs in distance_levels:
+    print(f"\n=== dist_capteurs = {dist_capteurs} ===")
     
     # Réinitialiser le réseau à chaque fois
     net = FCN().to(device)
     heat_equation = forward_problem(net)
     
     # Entraîner avec ce niveau de bruit
-    heat_equation.solve_with_sensors(N_iter=10000, P_bruit=P_bruit)
+    heat_equation.solve_with_sensors(N_iter=10000, dist_capteurs=dist_capteurs+0.02, critere_loss=1e-3)
     
     # Calculer l'erreur max par rapport à la référence propre
     ref = np.load('reference_clean.npz')
@@ -472,18 +469,16 @@ for P_bruit in noise_levels:
         u_pred = net(x_all, t_all).cpu().numpy().reshape(ms_x.shape)
     
     err_mean = np.abs(u_pred - u_clean).mean()
-    max_errors.append(err_mean)
+    mean_errors.append(err_mean)
     print(f"  → Erreur moyenne : {err_mean:.6f}")
 
 # --- Tracé ---
 plt.figure(figsize=(8, 5))
-plt.plot(noise_levels, max_errors, 'o-', color='steelblue', linewidth=2, markersize=7)
-plt.xscale('log')
-plt.xlabel('Ecart-type du bruit (e_t)')
+plt.plot(distance_levels, mean_errors, 'o-', color='steelblue', linewidth=2, markersize=7)
+plt.xlabel('Distance entre les capteurs (x=0.2 et x=d)')
 plt.ylabel('Erreur moyenne |u_pred - u_clean|')
-plt.title('Erreur moyenne en fonction de l\'écart-type du bruit')
+plt.title('Erreur moyenne en fonction de la distance entre les capteurs')
 plt.grid(True)
 plt.tight_layout()
 plt.savefig('erreur_vs_bruit.png', dpi=150)
 plt.show()
-'''
