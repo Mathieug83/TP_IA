@@ -356,7 +356,7 @@ class forward_problem:
             pt_u_sd = Variable(torch.from_numpy(u_sensor_d).float()+torch.randn(*u_sensor_d.shape)*P_bruit, requires_grad=False).to(device)
 
             # Perte globale (pas de BC !)
-            loss = mse_ic + mse_s02 + mse_d + mse_f*0.1
+            loss = mse_ic + mse_s02 + mse_d + mse_f*0.01
 
             loss.backward()
             optimizer.step()
@@ -444,40 +444,64 @@ class FCN(torch.nn.Module):
 
 
 # --- Sweep sur les puissances de bruit ---
-distance_levels = [0.0] + np.logspace(0, 1.8, 20).tolist()
-mean_errors = []
-print(len(distance_levels))
-for dist_capteurs in distance_levels:
-    print(f"\n=== dist_capteurs = {dist_capteurs} ===")
+distance_levels = np.linspace(0, 1.8, 20).tolist()
+N_SWEEPS = 5
+all_errors = np.zeros((N_SWEEPS, len(distance_levels)))
+
+for sweep_idx in range(N_SWEEPS):
+    print(f"\n{'='*50}")
+    print(f"  SWEEP {sweep_idx + 1} / {N_SWEEPS}")
+    print(f"{'='*50}")
     
-    # Réinitialiser le réseau à chaque fois
-    net = FCN().to(device)
-    heat_equation = forward_problem(net)
-    
-    # Entraîner avec ce niveau de bruit
-    heat_equation.solve_with_sensors(N_iter=10000, dist_capteurs=dist_capteurs+0.02, critere_loss=1e-3)
-    
-    # Calculer l'erreur max par rapport à la référence propre
-    ref = np.load('reference_clean.npz')
-    ms_x, ms_t = ref['ms_x'], ref['ms_t']
-    u_clean = ref['u']
-    
-    x_all = torch.from_numpy(np.ravel(ms_x).reshape(-1, 1)).float().to(device)
-    t_all = torch.from_numpy(np.ravel(ms_t).reshape(-1, 1)).float().to(device)
-    
-    with torch.no_grad():
-        u_pred = net(x_all, t_all).cpu().numpy().reshape(ms_x.shape)
-    
-    err_mean = np.abs(u_pred - u_clean).mean()
-    mean_errors.append(err_mean)
-    print(f"  → Erreur moyenne : {err_mean:.6f}")
+    for i, dist_capteurs in enumerate(distance_levels):
+        print(f"\n  === dist_capteurs = {dist_capteurs:.4f} ===")
+        
+        # Réinitialiser le réseau à chaque fois
+        net = FCN().to(device)
+        heat_equation = forward_problem(net)
+        
+        # Entraîner avec ce niveau de bruit
+        heat_equation.solve_with_sensors(N_iter=10000, dist_capteurs=dist_capteurs+0.02, critere_loss=1e-3)
+        
+        # Calculer l'erreur moyenne par rapport à la référence propre
+        ref = np.load('reference_clean.npz')
+        ms_x, ms_t = ref['ms_x'], ref['ms_t']
+        u_clean = ref['u']
+        
+        x_all = torch.from_numpy(np.ravel(ms_x).reshape(-1, 1)).float().to(device)
+        t_all = torch.from_numpy(np.ravel(ms_t).reshape(-1, 1)).float().to(device)
+        
+        with torch.no_grad():
+            u_pred = net(x_all, t_all).cpu().numpy().reshape(ms_x.shape)
+        
+        err_mean = np.abs(u_pred - u_clean).mean()
+        all_errors[sweep_idx, i] = err_mean
+        print(f"  → Erreur moyenne : {err_mean:.6f}")
+
+# --- Statistiques sur les sweeps ---
+mean_errors = all_errors.mean(axis=0)
+std_errors  = all_errors.std(axis=0)
 
 # --- Tracé ---
 plt.figure(figsize=(8, 5))
-plt.plot(distance_levels, mean_errors, 'o-', color='steelblue', linewidth=2, markersize=7)
+
+# Courbes individuelles (transparentes)
+for sweep_idx in range(N_SWEEPS):
+    plt.plot(distance_levels, all_errors[sweep_idx], 'o-',
+             color='steelblue', linewidth=1, markersize=4, alpha=0.25)
+
+# Moyenne ± écart-type
+plt.fill_between(distance_levels,
+                 mean_errors - std_errors,
+                 mean_errors + std_errors,
+                 color='steelblue', alpha=0.2, label='± 1 std')
+plt.plot(distance_levels, mean_errors, 'o-',
+         color='steelblue', linewidth=2.5, markersize=7, label=f'Moyenne ({N_SWEEPS} sweeps)')
+
 plt.xlabel('Distance entre les capteurs (x=0.2 et x=d)')
 plt.ylabel('Erreur moyenne |u_pred - u_clean|')
 plt.title('Erreur moyenne en fonction de la distance entre les capteurs')
+plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.savefig('erreur_vs_bruit.png', dpi=150)
